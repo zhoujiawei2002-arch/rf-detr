@@ -4,27 +4,38 @@
 
 项目目标是检测卡片灰度图中的细小缺陷，例如划伤、弱划伤、压印线、压印点等，为工业视觉检测场景提供可复现的训练与部署流程。
 
+> 说明：当前 README 使用 Mermaid 图和外链图表展示结果，避免依赖未上传到仓库的本地 PNG 图片。后续如果把本地 `docs/assets/kayou_rfdetr/` 下的图片上传到 GitHub，可以再切换回仓库内相对路径图片。
+
 ## 项目流程
 
 ```mermaid
 flowchart LR
-    A["RF-DETR 模型结构"] --> B["Kayou 缺陷数据集"]
-    B --> C["模型训练"]
-    C --> D["测试效果可视化"]
-    D --> E["结果与原因分析"]
-    E --> F["官方 export 导出 ONNX"]
-    F --> G["ONNX / TensorRT 部署"]
+    A["RF-DETR 模型理解"] --> B["Kayou 缺陷数据集整理"]
+    B --> C["训练脚本调试"]
+    C --> D["RF-DETR Large 训练"]
+    D --> E["指标与类别 AP 分析"]
+    E --> F["结果原因分析"]
+    F --> G["官方 export 导出 ONNX"]
+    G --> H["ONNX / TensorRT 部署"]
 ```
 
-## 1. RF-DETR 模型结构
+## 1. RF-DETR 模型说明
 
-RF-DETR 是一种基于 Transformer 的目标检测模型。本项目不展开复制官方介绍，只关注它在本任务里的作用：输入卡片图像后，模型通过视觉骨干网络提取特征，再由检测头输出缺陷类别和位置。
+RF-DETR 是一种基于 Transformer 的目标检测模型。本项目不照搬官方介绍，只关注它在本任务里的作用：输入卡片图像后，模型通过视觉骨干网络提取图像特征，再由 Transformer 检测结构输出缺陷类别和位置。
 
-下图为 RF-DETR 的整体结构示意：
+```mermaid
+flowchart LR
+    IMG["卡片灰度图输入"] --> PRE["灰度转 RGB / resize / normalize"]
+    PRE --> BACKBONE["ViT Backbone 提取多尺度特征"]
+    BACKBONE --> PROJECT["特征投影与查询选择"]
+    PROJECT --> DECODER["Transformer Decoder 迭代匹配缺陷目标"]
+    DECODER --> HEAD["分类头 + 框回归头"]
+    HEAD --> OUT["输出缺陷类别、置信度、检测框"]
+```
 
-![RF-DETR architecture](docs/assets/kayou_rfdetr/rfdetr_architecture.png)
+RF-DETR 适合本项目的原因是它可以通过全局注意力建模复杂纹理背景，对线状、点状、小面积缺陷有一定表达能力。但卡片表面的弱划伤、压印点等缺陷非常细小，仍然会受到输入分辨率、标注质量和类别数量不均衡的影响。
 
-## 2. 数据集示例
+## 2. 数据集情况
 
 数据来自卡游卡片灰度图，缺陷通常具有以下特点：
 
@@ -32,10 +43,6 @@ RF-DETR 是一种基于 Transformer 的目标检测模型。本项目不展开�
 - 划伤、弱划伤和压印类缺陷与背景纹理接近。
 - 卡片图案复杂，容易产生干扰纹理。
 - 部分类别样本数量较少，类别分布不均衡。
-
-| 示例 1 | 示例 2 |
-| --- | --- |
-| ![dataset sample 1](docs/assets/kayou_rfdetr/dataset_sample_1.png) | ![dataset sample 109](docs/assets/kayou_rfdetr/dataset_sample_109.png) |
 
 本次训练包含 5 个检测类别：
 
@@ -47,9 +54,17 @@ RF-DETR 是一种基于 Transformer 的目标检测模型。本项目不展开�
 | `YaYinLine` | 线状压印 |
 | `YaYinPoint` | 点状压印 |
 
-训练集和验证集类别分布如下：
+训练集和验证集标注数量分布如下：
 
-![Dataset distribution](docs/assets/kayou_rfdetr/dataset_distribution.png)
+![Dataset annotation distribution](https://quickchart.io/chart?width=760&height=360&c=%7Btype%3A%27bar%27%2Cdata%3A%7Blabels%3A%5B%27HuaShang%27%2C%27HuaShangWeak%27%2C%27YaYinGangZhu%27%2C%27YaYinLine%27%2C%27YaYinPoint%27%5D%2Cdatasets%3A%5B%7Blabel%3A%27Train%27%2Cdata%3A%5B699%2C136%2C91%2C1077%2C3100%5D%2CbackgroundColor%3A%27%232563eb%27%7D%2C%7Blabel%3A%27Valid%27%2Cdata%3A%5B101%2C16%2C16%2C145%2C378%5D%2CbackgroundColor%3A%27%23f59e0b%27%7D%5D%7D%2Coptions%3A%7Bplugins%3A%7Btitle%3A%7Bdisplay%3Atrue%2Ctext%3A%27Dataset%20annotation%20distribution%27%7D%2Clegend%3A%7Bposition%3A%27bottom%27%7D%7D%2Cscales%3A%7By%3A%7BbeginAtZero%3Atrue%7D%7D%7D%7D)
+
+| 类别 | train 标注数 | valid 标注数 |
+| --- | ---: | ---: |
+| `HuaShang` | 699 | 101 |
+| `HuaShangWeak` | 136 | 16 |
+| `YaYinGangZhu` | 91 | 16 |
+| `YaYinLine` | 1077 | 145 |
+| `YaYinPoint` | 3100 | 378 |
 
 ## 3. 训练工作
 
@@ -90,21 +105,13 @@ RF-DETR 是一种基于 Transformer 的目标检测模型。本项目不展开�
 | `val/precision` | 30 | 0.8253 | 0.8187 |
 | `val/recall` | 18 | 0.6531 | 0.6312 |
 
-### mAP 曲线
+### 整体指标图
 
-![mAP metrics](docs/assets/kayou_rfdetr/map_metrics.png)
-
-### Loss 曲线
-
-![Loss metrics](docs/assets/kayou_rfdetr/loss_metrics.png)
-
-### 综合训练指标
-
-![Training metrics](docs/assets/kayou_rfdetr/training_metrics.png)
+![Validation metrics](https://quickchart.io/chart?width=760&height=360&c=%7Btype%3A%27bar%27%2Cdata%3A%7Blabels%3A%5B%27mAP50-95%27%2C%27mAP50%27%2C%27mAP75%27%2C%27F1%27%2C%27Precision%27%2C%27Recall%27%5D%2Cdatasets%3A%5B%7Blabel%3A%27Best%27%2Cdata%3A%5B0.3566%2C0.6720%2C0.3478%2C0.7028%2C0.8253%2C0.6531%5D%2CbackgroundColor%3A%27%232563eb%27%7D%2C%7Blabel%3A%27Final%27%2Cdata%3A%5B0.3466%2C0.6622%2C0.3208%2C0.7024%2C0.8187%2C0.6312%5D%2CbackgroundColor%3A%27%23f59e0b%27%7D%5D%7D%2Coptions%3A%7Bplugins%3A%7Btitle%3A%7Bdisplay%3Atrue%2Ctext%3A%27Kayou%20RF-DETR%20validation%20metrics%27%7D%2Clegend%3A%7Bposition%3A%27bottom%27%7D%7D%2Cscales%3A%7By%3A%7Bmin%3A0%2Cmax%3A1%7D%7D%7D%7D)
 
 ### 各类别 AP
 
-![Per-class AP](docs/assets/kayou_rfdetr/class_ap.png)
+![Per-class AP](https://quickchart.io/chart?width=760&height=360&c=%7Btype%3A%27bar%27%2Cdata%3A%7Blabels%3A%5B%27HuaShang%27%2C%27HuaShangWeak%27%2C%27YaYinGangZhu%27%2C%27YaYinLine%27%2C%27YaYinPoint%27%5D%2Cdatasets%3A%5B%7Blabel%3A%27Final%20AP%27%2Cdata%3A%5B0.4726%2C0.1895%2C0.4628%2C0.3374%2C0.2708%5D%2CbackgroundColor%3A%5B%27%232563eb%27%2C%27%23ef4444%27%2C%27%2316a34a%27%2C%27%23f59e0b%27%2C%27%238b5cf6%27%5D%7D%5D%7D%2Coptions%3A%7Bplugins%3A%7Btitle%3A%7Bdisplay%3Atrue%2Ctext%3A%27Per-class%20final%20AP%27%7D%2Clegend%3A%7Bdisplay%3Afalse%7D%7D%2Cscales%3A%7By%3A%7Bmin%3A0%2Cmax%3A0.6%7D%7D%7D%7D)
 
 最终各类别 AP：
 
@@ -135,6 +142,7 @@ RF-DETR 是一种基于 Transformer 的目标检测模型。本项目不展开�
 | 弱纹理问题 | `HuaShangWeak` 与背景纹理接近，对比度低，容易被模型当作正常背景 |
 | 类别不均衡 | 少数类样本数量明显少于大类，普通随机采样下学习不足 |
 | 细长目标定位敏感 | 划伤和线状压印对框的位置、高度很敏感，IoU 容易下降 |
+| 标注一致性影响 | 小缺陷边界框轻微偏差就会造成 IoU 明显下降，影响 `mAP_75` 和 `mAP_50_95` |
 | 训练策略基础 | 当前训练没有专门加入弱类重采样、小目标增强或类别均衡采样 |
 
 后续优化建议：
@@ -151,10 +159,11 @@ RF-DETR 是一种基于 Transformer 的目标检测模型。本项目不展开�
 
 ```mermaid
 flowchart LR
-    A["checkpoint_best_regular.pth"] --> B["官方 model.export()"]
+    A["checkpoint_best_regular.pth"] --> B["RF-DETR 官方 model.export()"]
     B --> C["ONNX 模型"]
-    C --> D["TensorRT engine"]
-    D --> E["推理脚本 / FastAPI 服务"]
+    C --> D["ONNX Runtime 验证"]
+    C --> E["TensorRT engine"]
+    E --> F["推理脚本 / FastAPI 服务"]
 ```
 
 ### 7.1 官方 export 导出 ONNX
@@ -218,20 +227,14 @@ NCHW: [1, 3, 704, 704]
 后处理：
 
 ```text
-dets: cx, cy, w, h -> xyxy
-labels: logits -> sigmoid
-去掉 background/no-object
-按置信度阈值过滤
-映射回原图尺寸
+解析 boxes / scores / labels
+按置信度过滤
+坐标映射回原图
+输出检测框和类别
 ```
-
-详细部署文档见：[docs/kayou_rfdetr_onnx_tensorrt_deployment.md](docs/kayou_rfdetr_onnx_tensorrt_deployment.md)
 
 ## 8. 文档
 
-- [完整训练与测试报告](docs/kayou_rfdetr_project_report.md)
-- [ONNX/TensorRT 部署说明](docs/kayou_rfdetr_onnx_tensorrt_deployment.md)
+- [Kayou RF-DETR 项目报告](docs/kayou_rfdetr_project_report.md)
+- [ONNX 到 TensorRT 部署说明](docs/kayou_rfdetr_onnx_tensorrt_deployment.md)
 
-## 9. 总结
-
-本项目完成了 RF-DETR Large 在 Kayou 缺陷检测任务上的训练、测试分析和部署流程整理。当前模型对明显划伤和部分压印类缺陷识别较好，但弱划伤和小点状压印仍是主要优化方向。后续应围绕弱类补样、小目标增强和类别均衡训练继续迭代。
