@@ -1,413 +1,237 @@
-# rf-detr
-基于 RF-DETR 的小缺陷检测，用于工业视觉检测，检测对象为卡片游戏上的划痕，点缺陷等
 # Kayou RF-DETR 缺陷检测项目
 
-本仓库基于 RF-DETR Large 完成 Kayou 缺陷检测训练、测试分析和部署整理。项目工作包括数据集适配、训练脚本调试、模型训练、指标可视化、结果分析、原因定位，以及基于官方 `model.export()` 的 ONNX/TensorRT 部署流程。
+本仓库记录了基于 **RF-DETR Large** 的卡游卡片表面缺陷检测工作，内容包括数据集整理、模型训练、测试结果分析、原因分析，以及后续 ONNX/TensorRT 部署流程。
 
-完整项目报告见：[docs/kayou_rfdetr_project_report.md](docs/kayou_rfdetr_project_report.md)  
-本机部署说明见：[docs/kayou_rfdetr_onnx_tensorrt_deployment.md](docs/kayou_rfdetr_onnx_tensorrt_deployment.md)
+项目目标是检测卡片灰度图中的细小缺陷，例如划伤、弱划伤、压印线、压印点等，为工业视觉检测场景提供可复现的训练与部署流程。
 
 ## 项目流程
 
 ```mermaid
 flowchart LR
-    A["RF-DETR 模型介绍"] --> B["Kayou 数据集训练"]
-    B --> C["测试指标与曲线分析"]
-    C --> D["类别 AP 与原因分析"]
-    D --> E["官方 export 导出 ONNX"]
-    E --> F["ONNX / TensorRT 部署"]
+    A["RF-DETR 模型结构"] --> B["Kayou 缺陷数据集"]
+    B --> C["模型训练"]
+    C --> D["测试效果可视化"]
+    D --> E["结果与原因分析"]
+    E --> F["官方 export 导出 ONNX"]
+    F --> G["ONNX / TensorRT 部署"]
 ```
 
-## RF-DETR 结构
+## 1. RF-DETR 模型结构
+
+RF-DETR 是一种基于 Transformer 的目标检测模型。本项目不展开复制官方介绍，只关注它在本任务里的作用：输入卡片图像后，模型通过视觉骨干网络提取特征，再由检测头输出缺陷类别和位置。
+
+下图为 RF-DETR 的整体结构示意：
 
 ![RF-DETR architecture](docs/assets/kayou_rfdetr/rfdetr_architecture.png)
 
-## 核心测试结果
+## 2. 数据集示例
+
+数据来自卡游卡片灰度图，缺陷通常具有以下特点：
+
+- 目标小，像素占比低。
+- 划伤、弱划伤和压印类缺陷与背景纹理接近。
+- 卡片图案复杂，容易产生干扰纹理。
+- 部分类别样本数量较少，类别分布不均衡。
+
+| 示例 1 | 示例 2 |
+| --- | --- |
+| ![dataset sample 1](docs/assets/kayou_rfdetr/dataset_sample_1.png) | ![dataset sample 109](docs/assets/kayou_rfdetr/dataset_sample_109.png) |
+
+本次训练包含 5 个检测类别：
+
+| 类别 | 说明 |
+| --- | --- |
+| `HuaShang` | 划伤 |
+| `HuaShangWeak` | 弱划伤 |
+| `YaYinGangZhu` | 压印钢珠 |
+| `YaYinLine` | 线状压印 |
+| `YaYinPoint` | 点状压印 |
+
+训练集和验证集类别分布如下：
+
+![Dataset distribution](docs/assets/kayou_rfdetr/dataset_distribution.png)
+
+## 3. 训练工作
+
+本项目使用 RF-DETR Large 进行目标检测训练，主要工作包括：
+
+| 模块 | 工作内容 |
+| --- | --- |
+| 数据准备 | 整理 Kayou COCO 格式缺陷数据集 |
+| 训练脚本 | 编写并调试 `training_scripts/train_kayou_rfdetr.py` |
+| 模型训练 | 使用 RF-DETR Large 训练卡片缺陷检测模型 |
+| 指标分析 | 基于 `metrics.csv` 分析 mAP、loss、F1、precision、recall |
+| 报告整理 | 生成训练报告和可视化图表 |
+| 部署整理 | 编写官方 `model.export()` 导出 ONNX 脚本，整理 TensorRT 部署流程 |
+
+关键训练配置：
+
+| 项目 | 配置 |
+| --- | --- |
+| 模型 | RF-DETR Large |
+| 数据格式 | COCO |
+| 输入尺寸 | 704 x 704 |
+| batch size | 2 |
+| 梯度累积 | 8 |
+| 有效 batch | 16 |
+| 最佳模型 | `checkpoint_best_regular.pth` |
+| 最佳 epoch | epoch 29 |
+
+## 4. 测试效果
+
+核心指标如下：
 
 | 指标 | 最佳 epoch | 最佳值 | 最终值 |
 | --- | ---: | ---: | ---: |
 | `val/mAP_50_95` | 29 | 0.3566 | 0.3466 |
 | `val/mAP_50` | 20 | 0.6720 | 0.6622 |
+| `val/mAP_75` | 18 | 0.3478 | 0.3208 |
 | `val/F1` | 30 | 0.7028 | 0.7024 |
 | `val/precision` | 30 | 0.8253 | 0.8187 |
 | `val/recall` | 18 | 0.6531 | 0.6312 |
 
+### mAP 曲线
+
 ![mAP metrics](docs/assets/kayou_rfdetr/map_metrics.png)
+
+### Loss 曲线
+
+![Loss metrics](docs/assets/kayou_rfdetr/loss_metrics.png)
+
+### 综合训练指标
+
+![Training metrics](docs/assets/kayou_rfdetr/training_metrics.png)
+
+### 各类别 AP
 
 ![Per-class AP](docs/assets/kayou_rfdetr/class_ap.png)
 
-## 结果分析摘要
+最终各类别 AP：
 
-模型对 `HuaShang` 和 `YaYinGangZhu` 表现较好，但 `HuaShangWeak` 和 `YaYinPoint` 仍是主要难点。原因主要包括：弱划伤纹理不明显、小点状压印在 704 输入下像素占比很小、类别标注数量不均衡，以及当前训练策略没有专门针对小目标和弱类做采样增强。
+| 类别 | final AP | 表现 |
+| --- | ---: | --- |
+| `HuaShang` | 0.4726 | 较好 |
+| `YaYinGangZhu` | 0.4628 | 较好 |
+| `YaYinLine` | 0.3374 | 中等偏弱 |
+| `YaYinPoint` | 0.2708 | 较弱 |
+| `HuaShangWeak` | 0.1895 | 最弱 |
 
-![Dataset distribution](docs/assets/kayou_rfdetr/dataset_distribution.png)
+## 5. 结果分析
 
-## 部署摘要
+从测试结果看，模型已经具备初步可用的缺陷检测能力：
+
+- `val/mAP_50` 达到 0.6720，说明模型能较好找到缺陷的大致位置。
+- `val/F1` 达到 0.7028，整体检测能力已经形成。
+- `precision` 高于 `recall`，说明误检控制相对较好，但仍存在漏检。
+- `mAP_50_95` 明显低于 `mAP_50`，说明高 IoU 下的精确定位仍有难度。
+
+## 6. 原因分析
+
+效果差异主要来自以下几个方面：
+
+| 原因 | 说明 |
+| --- | --- |
+| 小目标问题 | `YaYinPoint` 在缩放到 704 x 704 后像素占比很小，定位难度高 |
+| 弱纹理问题 | `HuaShangWeak` 与背景纹理接近，对比度低，容易被模型当作正常背景 |
+| 类别不均衡 | 少数类样本数量明显少于大类，普通随机采样下学习不足 |
+| 细长目标定位敏感 | 划伤和线状压印对框的位置、高度很敏感，IoU 容易下降 |
+| 训练策略基础 | 当前训练没有专门加入弱类重采样、小目标增强或类别均衡采样 |
+
+后续优化建议：
+
+- 增加 `HuaShangWeak`、`YaYinGangZhu` 的样本数量。
+- 针对 `YaYinPoint` 做局部裁剪、放大、小目标增强。
+- 尝试类别均衡采样或弱类 oversampling。
+- 复查漏检和误检样本，修正边界框和困难标注。
+- 尝试更高输入分辨率，并重新评估小目标 AP。
+
+## 7. 部署流程
 
 推荐部署路线：
 
-```text
-checkpoint_best_regular.pth
-        ↓ 官方 model.export()
-rfdetr-large.onnx
-        ↓ trtexec
-kayou_rfdetr_large_fp16.engine
-        ↓ 推理脚本 / FastAPI 服务
+```mermaid
+flowchart LR
+    A["checkpoint_best_regular.pth"] --> B["官方 model.export()"]
+    B --> C["ONNX 模型"]
+    C --> D["TensorRT engine"]
+    D --> E["推理脚本 / FastAPI 服务"]
 ```
 
-官方 ONNX 导出脚本：
+### 7.1 官方 export 导出 ONNX
+
+本项目提供脚本：
+
+```text
+scripts/export_kayou_rfdetr_onnx.py
+```
+
+运行方式：
 
 ```powershell
 python -S scripts\export_kayou_rfdetr_onnx.py
 ```
 
-默认读取：
+默认配置：
+
+| 参数 | 值 |
+| --- | --- |
+| 权重 | `output/kayou_rfdetr_large_coco/checkpoint_best_regular.pth` |
+| 输出目录 | `deploy/kayou_rfdetr_large_onnx` |
+| 输入尺寸 | 704 x 704 |
+| batch | 1 |
+| opset | 17 |
+| 导出接口 | RF-DETR 官方 `model.export()` |
+
+### 7.2 ONNX 转 TensorRT
+
+导出 ONNX 后，可使用 NVIDIA TensorRT 的 `trtexec` 转换：
+
+```powershell
+$onnx = "deploy\kayou_rfdetr_large_onnx\rfdetr-large.onnx"
+$engine = "deploy\kayou_rfdetr_large_onnx\kayou_rfdetr_large_fp16.engine"
+
+trtexec `
+  --onnx="$onnx" `
+  --saveEngine="$engine" `
+  --fp16 `
+  --memPoolSize=workspace:4096
+```
+
+### 7.3 推理服务
+
+最终部署程序包含：
 
 ```text
-output/kayou_rfdetr_large_coco/checkpoint_best_regular.pth
+图片输入 -> 前处理 -> 模型推理 -> 后处理 -> JSON 输出
 ```
 
-默认导出到：
+前处理：
 
 ```text
-deploy/kayou_rfdetr_large_onnx
+RGB / 灰度转 RGB
+resize 到 704 x 704
+归一化到 [0, 1]
+ImageNet normalize
+NCHW: [1, 3, 704, 704]
 ```
 
----
+后处理：
 
-# RF-DETR: Real-Time SOTA Object Detection, Instance Segmentation, and Keypoint Detection
-
-<div align="center">
-
-[![version](https://badge.fury.io/py/rfdetr.svg)](https://badge.fury.io/py/rfdetr)
-[![downloads](https://img.shields.io/pypi/dm/rfdetr)](https://pypistats.org/packages/rfdetr)
-[![codecov](https://codecov.io/gh/roboflow/rf-detr/graph/badge.svg?token=K8V4ARR3XV)](https://codecov.io/gh/roboflow/rf-detr)
-[![python-version](https://img.shields.io/pypi/pyversions/rfdetr)](https://badge.fury.io/py/rfdetr)
-[![license](https://img.shields.io/badge/license-Apache%202.0-blue)](https://github.com/roboflow/rfdetr/blob/main/LICENSE)
-
-[![arXiv](https://img.shields.io/badge/arXiv-2511.09554-b31b1b.svg)](https://arxiv.org/abs/2511.09554)
-[![hf space](https://img.shields.io/badge/%F0%9F%A4%97%20Hugging%20Face-Spaces-blue)](https://huggingface.co/spaces/SkalskiP/RF-DETR)
-[![colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/roboflow-ai/notebooks/blob/main/notebooks/how-to-finetune-rf-detr-on-detection-dataset.ipynb)
-[![roboflow](https://raw.githubusercontent.com/roboflow-ai/notebooks/main/assets/badges/roboflow-blogpost.svg)](https://blog.roboflow.com/rf-detr)
-[![discord](https://img.shields.io/discord/1159501506232451173?logo=discord&label=discord&labelColor=fff&color=5865f2&link=https%3A%2F%2Fdiscord.gg%2FGbfgXGJ8Bk)](https://discord.gg/GbfgXGJ8Bk)
-
-<a href="https://trendshift.io/repositories/14379?utm_source=repository-badge&amp;utm_medium=badge&amp;utm_campaign=badge-repository-14379" target="_blank" rel="noopener noreferrer">
-<img src="https://trendshift.io/api/badge/repositories/14379" alt="roboflow%2Frf-detr | Trendshift" width="250" height="55"/>
-</a>
-
-</div>
-
----
-
-RF-DETR is a real-time transformer architecture for object detection, instance segmentation, and keypoint detection (preview) developed by Roboflow. Built on a DINOv2 vision transformer backbone, RF-DETR delivers state-of-the-art accuracy and latency trade-offs on [Microsoft COCO](https://cocodataset.org/#home) and [RF100-VL](https://github.com/roboflow/rf100-vl).
-
-RF-DETR uses a DINOv2 vision transformer backbone and supports object detection, instance segmentation, and keypoint detection (preview) in a single, consistent API. The open-source `rfdetr` package and Apache-designated models are released under Apache 2.0, while Plus components (`rfdetr_plus`, including RF-DETR-XL/2XL detection models) are licensed under PML 1.0.
-
-https://github.com/user-attachments/assets/add23fd1-266f-4538-8809-d7dd5767e8e6
-
-## Install
-
-To install RF-DETR, install the `rfdetr` package in a [**Python>=3.10**](https://www.python.org/) environment with `pip`.
-
-```bash
-pip install rfdetr
+```text
+dets: cx, cy, w, h -> xyxy
+labels: logits -> sigmoid
+去掉 background/no-object
+按置信度阈值过滤
+映射回原图尺寸
 ```
 
-<details>
-<summary>Install from source</summary>
+详细部署文档见：[docs/kayou_rfdetr_onnx_tensorrt_deployment.md](docs/kayou_rfdetr_onnx_tensorrt_deployment.md)
 
-<br>
+## 8. 文档
 
-By installing RF-DETR from source, you can explore the most recent features and enhancements that have not yet been officially released. **Please note that these updates are still in development and may not be as stable as the latest published release.**
+- [完整训练与测试报告](docs/kayou_rfdetr_project_report.md)
+- [ONNX/TensorRT 部署说明](docs/kayou_rfdetr_onnx_tensorrt_deployment.md)
 
-```bash
-pip install https://github.com/roboflow/rf-detr/archive/refs/heads/develop.zip
-```
+## 9. 总结
 
-</details>
-
-## Benchmarks
-
-RF-DETR achieves state-of-the-art results in both object detection and instance segmentation, with benchmarks reported on Microsoft COCO and RF100-VL (RF100-VL for detection only). The charts and tables below compare RF-DETR against other top real-time models across accuracy and latency for detection and segmentation. All latency numbers were measured on an NVIDIA T4 using TensorRT, FP16, and batch size 1. For full benchmarking methodology and reproducibility details, see [roboflow/sab](https://github.com/roboflow/single_artifact_benchmarking).
-
-### Detection
-
-<img alt="rf_detr_1-4_latency_accuracy_object_detection" src="https://storage.googleapis.com/com-roboflow-marketing/rf-detr/rf_detr_1-4_latency_accuracy_object_detection.png" />
-
-<details>
-<summary>See object detection benchmark numbers</summary>
-
-<br>
-
-| Architecture  | COCO AP<sub>50</sub> | COCO AP<sub>50:95</sub> | RF100VL AP<sub>50</sub> | RF100VL AP<sub>50:95</sub> | Latency (ms) | Params (M) | Resolution |  License   |
-| :-----------: | :------------------: | :---------------------: | :---------------------: | :------------------------: | :----------: | :--------: | :--------: | :--------: |
-|   RF-DETR-N   |         67.6         |          48.4           |          85.0           |            57.7            |     2.3      |    30.5    |  384x384   | Apache 2.0 |
-|   RF-DETR-S   |         72.1         |          53.0           |          86.7           |            60.2            |     3.5      |    32.1    |  512x512   | Apache 2.0 |
-|   RF-DETR-M   |         73.6         |          54.7           |          87.4           |            61.2            |     4.4      |    33.7    |  576x576   | Apache 2.0 |
-|   RF-DETR-L   |         75.1         |          56.5           |          88.2           |            62.2            |     6.8      |    33.9    |  704x704   | Apache 2.0 |
-| RF-DETR-XL △  |         77.4         |          58.6           |          88.5           |            62.9            |     11.5     |   126.4    |  700x700   |  PML 1.0   |
-| RF-DETR-2XL △ |         78.5         |          60.1           |          89.0           |            63.2            |     17.2     |   126.9    |  880x880   |  PML 1.0   |
-|   YOLO11-N    |         52.0         |          37.4           |          81.4           |            55.3            |     2.5      |    2.6     |  640x640   |  AGPL-3.0  |
-|   YOLO11-S    |         59.7         |          44.4           |          82.3           |            56.2            |     3.2      |    9.4     |  640x640   |  AGPL-3.0  |
-|   YOLO11-M    |         64.1         |          48.6           |          82.5           |            56.5            |     5.1      |    20.1    |  640x640   |  AGPL-3.0  |
-|   YOLO11-L    |         64.9         |          49.9           |          82.2           |            56.5            |     6.5      |    25.3    |  640x640   |  AGPL-3.0  |
-|   YOLO11-X    |         66.1         |          50.9           |          81.7           |            56.2            |     10.5     |    56.9    |  640x640   |  AGPL-3.0  |
-|   YOLO26-N    |         55.8         |          40.3           |          76.7           |            52.0            |     1.7      |    2.6     |  640x640   |  AGPL-3.0  |
-|   YOLO26-S    |         64.3         |          47.7           |          82.7           |            57.0            |     2.6      |    9.4     |  640x640   |  AGPL-3.0  |
-|   YOLO26-M    |         69.7         |          52.5           |          84.4           |            58.7            |     4.4      |    20.1    |  640x640   |  AGPL-3.0  |
-|   YOLO26-L    |         71.1         |          54.1           |          85.0           |            59.3            |     5.7      |    25.3    |  640x640   |  AGPL-3.0  |
-|   YOLO26-X    |         74.0         |          56.9           |          85.6           |            60.0            |     9.6      |    56.9    |  640x640   |  AGPL-3.0  |
-|   LW-DETR-T   |         60.7         |          42.9           |          84.7           |            57.1            |     1.9      |    12.1    |  640x640   | Apache 2.0 |
-|   LW-DETR-S   |         66.8         |          48.0           |          85.0           |            57.4            |     2.6      |    14.6    |  640x640   | Apache 2.0 |
-|   LW-DETR-M   |         72.0         |          52.6           |          86.8           |            59.8            |     4.4      |    28.2    |  640x640   | Apache 2.0 |
-|   LW-DETR-L   |         74.6         |          56.1           |          87.4           |            61.5            |     6.9      |    46.8    |  640x640   | Apache 2.0 |
-|   LW-DETR-X   |         76.9         |          58.3           |          87.9           |            62.1            |     13.0     |   118.0    |  640x640   | Apache 2.0 |
-|   D-FINE-N    |         60.2         |          42.7           |          84.4           |            58.2            |     2.1      |    3.8     |  640x640   | Apache 2.0 |
-|   D-FINE-S    |         67.6         |          50.6           |          85.3           |            60.3            |     3.5      |    10.2    |  640x640   | Apache 2.0 |
-|   D-FINE-M    |         72.6         |          55.0           |          85.5           |            60.6            |     5.4      |    19.2    |  640x640   | Apache 2.0 |
-|   D-FINE-L    |         74.9         |          57.2           |          86.4           |            61.6            |     7.5      |    31.0    |  640x640   | Apache 2.0 |
-|   D-FINE-X    |         76.8         |          59.3           |          86.9           |            62.2            |     11.5     |    62.0    |  640x640   | Apache 2.0 |
-
-</details>
-
-### Segmentation
-
-<img alt="rf_detr_1-4_latency_accuracy_instance_segmentation" src="https://storage.googleapis.com/com-roboflow-marketing/rf-detr/rf_detr_1-4_latency_accuracy_instance_segmentation.png" />
-
-<details>
-<summary>See instance segmentation benchmark numbers</summary>
-
-<br>
-
-|  Architecture   | COCO AP<sub>50</sub> | COCO AP<sub>50:95</sub> | Latency (ms) | Params (M) | Resolution |  License   |
-| :-------------: | :------------------: | :---------------------: | :----------: | :--------: | :--------: | :--------: |
-|  RF-DETR-Seg-N  |         63.0         |          40.3           |     3.4      |    33.6    |  312x312   | Apache 2.0 |
-|  RF-DETR-Seg-S  |         66.2         |          43.1           |     4.4      |    33.7    |  384x384   | Apache 2.0 |
-|  RF-DETR-Seg-M  |         68.4         |          45.3           |     5.9      |    35.7    |  432x432   | Apache 2.0 |
-|  RF-DETR-Seg-L  |         70.5         |          47.1           |     8.8      |    36.2    |  504x504   | Apache 2.0 |
-| RF-DETR-Seg-XL  |         72.2         |          48.8           |     13.5     |    38.1    |  624x624   | Apache 2.0 |
-| RF-DETR-Seg-2XL |         73.1         |          49.9           |     21.8     |    38.6    |  768x768   | Apache 2.0 |
-|  YOLOv8-N-Seg   |         45.6         |          28.3           |     3.5      |    3.4     |  640x640   |  AGPL-3.0  |
-|  YOLOv8-S-Seg   |         53.8         |          34.0           |     4.2      |    11.8    |  640x640   |  AGPL-3.0  |
-|  YOLOv8-M-Seg   |         58.2         |          37.3           |     7.0      |    27.3    |  640x640   |  AGPL-3.0  |
-|  YOLOv8-L-Seg   |         60.5         |          39.0           |     9.7      |    46.0    |  640x640   |  AGPL-3.0  |
-|  YOLOv8-XL-Seg  |         61.3         |          39.5           |     14.0     |    71.8    |  640x640   |  AGPL-3.0  |
-|  YOLOv11-N-Seg  |         47.8         |          30.0           |     3.6      |    2.9     |  640x640   |  AGPL-3.0  |
-|  YOLOv11-S-Seg  |         55.4         |          35.0           |     4.6      |    10.1    |  640x640   |  AGPL-3.0  |
-|  YOLOv11-M-Seg  |         60.0         |          38.5           |     6.9      |    22.4    |  640x640   |  AGPL-3.0  |
-|  YOLOv11-L-Seg  |         61.5         |          39.5           |     8.3      |    27.6    |  640x640   |  AGPL-3.0  |
-| YOLOv11-XL-Seg  |         62.4         |          40.1           |     13.7     |    62.1    |  640x640   |  AGPL-3.0  |
-|  YOLO26-N-Seg   |         54.3         |          34.7           |     2.31     |    2.7     |  640x640   |  AGPL-3.0  |
-|  YOLO26-S-Seg   |         62.4         |          40.2           |     3.47     |    10.4    |  640x640   |  AGPL-3.0  |
-|  YOLO26-M-Seg   |         67.8         |          44.0           |     6.32     |    23.6    |  640x640   |  AGPL-3.0  |
-|  YOLO26-L-Seg   |         69.8         |          45.5           |     7.58     |    28.0    |  640x640   |  AGPL-3.0  |
-|  YOLO26-X-Seg   |         71.6         |          46.8           |    12.92     |    62.8    |  640x640   |  AGPL-3.0  |
-
-</details>
-
-### Keypoints
-
-<img alt="RF-DETR Keypoint mAP vs latency chart comparing against YOLO26-pose and YOLO11-pose on MS COCO" src="https://raw.githubusercontent.com/roboflow/rf-detr/develop/docs/assets/keypoints/kp-map-latency.png" />
-
-<details>
-<summary>See keypoint detection benchmark numbers</summary>
-
-<br>
-
-|        Architecture        | COCO AP<sub>50:95</sub> | Latency (ms) |  License   |
-| :------------------------: | :---------------------: | :----------: | :--------: |
-| RF-DETR Keypoint (Preview) |          71.8           |     9.7      | Apache 2.0 |
-|       YOLO11-pose N        |          48.9           |     3.2      |  AGPL-3.0  |
-|       YOLO11-pose S        |          57.5           |     3.4      |  AGPL-3.0  |
-|       YOLO11-pose M        |          64.2           |     5.2      |  AGPL-3.0  |
-|       YOLO11-pose L        |          65.2           |     6.6      |  AGPL-3.0  |
-|       YOLO11-pose X        |          68.6           |     10.6     |  AGPL-3.0  |
-|       YOLO26-pose N        |          55.9           |     1.9      |  AGPL-3.0  |
-|       YOLO26-pose S        |          62.0           |     2.7      |  AGPL-3.0  |
-|       YOLO26-pose M        |          68.0           |     4.6      |  AGPL-3.0  |
-|       YOLO26-pose L        |          69.2           |     5.9      |  AGPL-3.0  |
-|       YOLO26-pose X        |          71.0           |     9.8      |  AGPL-3.0  |
-
-</details>
-
-> Keypoint benchmarks report AP<sub>50:95</sub> (OKS-based); this is the standard COCO keypoint comparison metric.
-
-## Run Models
-
-### Detection
-
-RF-DETR provides multiple model sizes, ranging from Nano to 2XLarge. To use a different model size, replace the class name in the code snippet below with another class from the table.
-
-```python
-import supervision as sv
-from rfdetr import RFDETRMedium
-from rfdetr.assets.coco_classes import COCO_CLASSES
-
-model = RFDETRMedium()
-
-detections = model.predict("https://media.roboflow.com/dog.jpg", threshold=0.5)
-
-labels = [f"{COCO_CLASSES[class_id]}" for class_id in detections.class_id]
-
-annotated_image = sv.BoxAnnotator().annotate(detections.metadata["source_image"], detections)
-annotated_image = sv.LabelAnnotator().annotate(annotated_image, detections, labels)
-```
-
-<details>
-<summary>Run RF-DETR with Inference</summary>
-
-<br>
-
-You can also run RF-DETR models using the Inference library. To switch model size, select the appropriate inference package alias from the table below.
-
-```python
-import requests
-import supervision as sv
-from PIL import Image
-from inference import get_model
-
-model = get_model("rfdetr-medium")
-
-image = Image.open(requests.get("https://media.roboflow.com/dog.jpg", stream=True).raw)
-predictions = model.infer(image, confidence=0.5)[0]
-detections = sv.Detections.from_inference(predictions)
-
-annotated_image = sv.BoxAnnotator().annotate(image, detections)
-annotated_image = sv.LabelAnnotator().annotate(annotated_image, detections)
-```
-
-</details>
-
-| Size | RF-DETR package class | Inference package alias | COCO AP<sub>50</sub> | COCO AP<sub>50:95</sub> | Latency (ms) | Params (M) | Resolution |  License   |
-| :--: | :-------------------: | :---------------------- | :------------------: | :---------------------: | :----------: | :--------: | :--------: | :--------: |
-|  N   |     `RFDETRNano`      | `rfdetr-nano`           |         67.6         |          48.4           |     2.3      |    30.5    |  384x384   | Apache 2.0 |
-|  S   |     `RFDETRSmall`     | `rfdetr-small`          |         72.1         |          53.0           |     3.5      |    32.1    |  512x512   | Apache 2.0 |
-|  M   |    `RFDETRMedium`     | `rfdetr-medium`         |         73.6         |          54.7           |     4.4      |    33.7    |  576x576   | Apache 2.0 |
-|  L   |     `RFDETRLarge`     | `rfdetr-large`          |         75.1         |          56.5           |     6.8      |    33.9    |  704x704   | Apache 2.0 |
-|  XL  |   `RFDETRXLarge` △    | `rfdetr-xlarge`         |         77.4         |          58.6           |     11.5     |   126.4    |  700x700   |  PML 1.0   |
-| 2XL  |   `RFDETR2XLarge` △   | `rfdetr-2xlarge`        |         78.5         |          60.1           |     17.2     |   126.9    |  880x880   |  PML 1.0   |
-
-> △ Requires the `rfdetr_plus` extension: `pip install rfdetr[plus]`. See [License](#license) for details.
-
-### Segmentation
-
-RF-DETR supports instance segmentation with model sizes from Nano to 2XLarge. To use a different model size, replace the class name in the code snippet below with another class from the table.
-
-```python
-import supervision as sv
-from rfdetr import RFDETRSegMedium
-from rfdetr.assets.coco_classes import COCO_CLASSES
-
-model = RFDETRSegMedium()
-
-detections = model.predict("https://media.roboflow.com/dog.jpg", threshold=0.5)
-
-labels = [f"{COCO_CLASSES[class_id]}" for class_id in detections.class_id]
-
-annotated_image = sv.MaskAnnotator().annotate(detections.metadata["source_image"], detections)
-annotated_image = sv.LabelAnnotator().annotate(annotated_image, detections, labels)
-```
-
-<details>
-<summary>Run RF-DETR-Seg with Inference</summary>
-
-<br>
-
-You can also run RF-DETR-Seg models using the Inference library. To switch model size, select the appropriate inference package alias from the table below.
-
-```python
-import requests
-import supervision as sv
-from PIL import Image
-from inference import get_model
-
-model = get_model("rfdetr-seg-medium")
-
-image = Image.open(requests.get("https://media.roboflow.com/dog.jpg", stream=True).raw)
-predictions = model.infer(image, confidence=0.5)[0]
-detections = sv.Detections.from_inference(predictions)
-
-annotated_image = sv.MaskAnnotator().annotate(image, detections)
-annotated_image = sv.LabelAnnotator().annotate(annotated_image, detections)
-```
-
-</details>
-
-| Size | RF-DETR package class | Inference package alias | COCO AP<sub>50</sub> | COCO AP<sub>50:95</sub> | Latency (ms) | Params (M) | Resolution |  License   |
-| :--: | :-------------------: | :---------------------- | :------------------: | :---------------------: | :----------: | :--------: | :--------: | :--------: |
-|  N   |    `RFDETRSegNano`    | `rfdetr-seg-nano`       |         63.0         |          40.3           |     3.4      |    33.6    |  312x312   | Apache 2.0 |
-|  S   |   `RFDETRSegSmall`    | `rfdetr-seg-small`      |         66.2         |          43.1           |     4.4      |    33.7    |  384x384   | Apache 2.0 |
-|  M   |   `RFDETRSegMedium`   | `rfdetr-seg-medium`     |         68.4         |          45.3           |     5.9      |    35.7    |  432x432   | Apache 2.0 |
-|  L   |   `RFDETRSegLarge`    | `rfdetr-seg-large`      |         70.5         |          47.1           |     8.8      |    36.2    |  504x504   | Apache 2.0 |
-|  XL  |   `RFDETRSegXLarge`   | `rfdetr-seg-xlarge`     |         72.2         |          48.8           |     13.5     |    38.1    |  624x624   | Apache 2.0 |
-| 2XL  |  `RFDETRSeg2XLarge`   | `rfdetr-seg-2xlarge`    |         73.1         |          49.9           |     21.8     |    38.6    |  768x768   | Apache 2.0 |
-
-### Keypoints
-
-RF-DETR supports keypoint detection (preview) with `RFDETRKeypointPreview`, pretrained on COCO person keypoints.
-
-```python
-from rfdetr import RFDETRKeypointPreview
-
-model = RFDETRKeypointPreview()
-key_points = model.predict("image.jpg", threshold=0.5)
-```
-
-|        Size        |  RF-DETR package class  | COCO AP<sub>50:95</sub> | Latency (ms) | Params (M) | Resolution |  License   |
-| :----------------: | :---------------------: | :---------------------: | :----------: | :--------: | :--------: | :--------: |
-| Keypoint (Preview) | `RFDETRKeypointPreview` |          71.8           |     9.7      |   126.4    |  576x576   | Apache 2.0 |
-
-### Train Models
-
-RF-DETR supports training for object detection, instance segmentation, and keypoint detection (preview). You can train models in [Google Colab](https://colab.research.google.com/github/roboflow-ai/notebooks/blob/main/notebooks/how-to-finetune-rf-detr-on-detection-dataset.ipynb) or directly on the Roboflow platform. Below you will find a step-by-step video fine-tuning tutorial.
-
-[![rf-detr-tutorial-banner](https://github.com/user-attachments/assets/555a45c3-96e8-4d8a-ad29-f23403c8edfd)](https://youtu.be/-OvpdLAElFA)
-
-## Documentation
-
-Visit our [documentation website](https://rfdetr.roboflow.com) to learn more about how to use RF-DETR.
-
-## License
-
-Licensing is split by component:
-
-- The open-source `rfdetr` package and Apache-designated model weights are licensed under Apache License 2.0. See [`LICENSE`](LICENSE).
-- Plus components, including the `rfdetr_plus` extension and RF-DETR-XL / RF-DETR-2XL detection models, are licensed under PML 1.0.
-
-## Acknowledgements
-
-Our work is built upon [LW-DETR](https://arxiv.org/pdf/2406.03459), [DINOv2](https://arxiv.org/pdf/2304.07193), and [Deformable DETR](https://arxiv.org/pdf/2010.04159). Thanks to their authors for their excellent work!
-
-## Citation
-
-If you find our work helpful for your research, please consider citing the following BibTeX entry.
-
-```bibtex
-@misc{rf-detr,
-    title={RF-DETR: Neural Architecture Search for Real-Time Detection Transformers},
-    author={Isaac Robinson and Peter Robicheaux and Matvei Popov and Deva Ramanan and Neehar Peri},
-    year={2025},
-    eprint={2511.09554},
-    archivePrefix={arXiv},
-    primaryClass={cs.CV},
-    url={https://arxiv.org/abs/2511.09554},
-}
-```
-
-## Contribute
-
-We welcome and appreciate all contributions! If you notice any issues or bugs, have questions, or would like to suggest new features, please [open an issue](https://github.com/roboflow/rf-detr/issues/new) or pull request. By sharing your ideas and improvements, you help make RF-DETR better for everyone.
-
-<p align="center">
-    <a href="https://youtube.com/roboflow"><img src="https://media.roboflow.com/notebooks/template/icons/purple/youtube.png?ik-sdk-version=javascript-1.4.3&updatedAt=1672949634652" width="3%"/></a>
-    <img src="https://raw.githubusercontent.com/ultralytics/assets/main/social/logo-transparent.png" width="3%"/>
-    <a href="https://roboflow.com"><img src="https://media.roboflow.com/notebooks/template/icons/purple/roboflow-app.png?ik-sdk-version=javascript-1.4.3&updatedAt=1672949746649" width="3%"/></a>
-    <img src="https://raw.githubusercontent.com/ultralytics/assets/main/social/logo-transparent.png" width="3%"/>
-    <a href="https://www.linkedin.com/company/roboflow-ai/"><img src="https://media.roboflow.com/notebooks/template/icons/purple/linkedin.png?ik-sdk-version=javascript-1.4.3&updatedAt=1672949633691" width="3%"/></a>
-    <img src="https://raw.githubusercontent.com/ultralytics/assets/main/social/logo-transparent.png" width="3%"/>
-    <a href="https://docs.roboflow.com"><img src="https://media.roboflow.com/notebooks/template/icons/purple/knowledge.png?ik-sdk-version=javascript-1.4.3&updatedAt=1672949634511" width="3%"/></a>
-    <img src="https://raw.githubusercontent.com/ultralytics/assets/main/social/logo-transparent.png" width="3%"/>
-    <a href="https://discuss.roboflow.com"><img src="https://media.roboflow.com/notebooks/template/icons/purple/forum.png?ik-sdk-version=javascript-1.4.3&updatedAt=1672949633584" width="3%"/></a>
-    <img src="https://raw.githubusercontent.com/ultralytics/assets/main/social/logo-transparent.png" width="3%"/>
-    <a href="https://blog.roboflow.com"><img src="https://media.roboflow.com/notebooks/template/icons/purple/blog.png?ik-sdk-version=javascript-1.4.3&updatedAt=1672949633605" width="3%"/></a>
-</p>
+本项目完成了 RF-DETR Large 在 Kayou 缺陷检测任务上的训练、测试分析和部署流程整理。当前模型对明显划伤和部分压印类缺陷识别较好，但弱划伤和小点状压印仍是主要优化方向。后续应围绕弱类补样、小目标增强和类别均衡训练继续迭代。
